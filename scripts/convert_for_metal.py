@@ -21,7 +21,7 @@ with open("dist/external_scene.bin","wb") as f:
   data=urllib.request.urlopen(req,timeout=90).read()
   input=pathlib.Path("temp")/name;input.write_bytes(data)
   output=pathlib.Path("temp")/("decoded-"+name)
-  subprocess.run(["./node_modules/.bin/gltf-transform","decompress",str(input),str(output)],check=True)
+  subprocess.run(["./node_modules/.bin/gltf-transform","copy",str(input),str(output)],check=True)
   scene=trimesh.load(str(output),file_type="glb",force="scene")
   mesh=scene.dump(concatenate=True)
   vertices=np.asarray(mesh.vertices)
