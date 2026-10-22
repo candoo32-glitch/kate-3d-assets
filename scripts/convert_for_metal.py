@@ -14,6 +14,7 @@ SPEC=[
 pathlib.Path("dist").mkdir(exist_ok=True)
 pathlib.Path("temp").mkdir(exist_ok=True)
 count=0
+originals=[]
 with open("dist/external_scene.bin","wb") as f:
  f.write(b"\x00"*4)
  for name,center,size,mat in SPEC:
@@ -22,6 +23,7 @@ with open("dist/external_scene.bin","wb") as f:
   input=pathlib.Path("temp")/name;input.write_bytes(data)
   output=pathlib.Path("temp")/("decoded-"+name)
   subprocess.run(["./node_modules/.bin/gltf-transform","copy",str(input),str(output)],check=True)
+  originals.append((name,output.read_bytes()))
   scene=trimesh.load(str(output),file_type="glb",force="scene")
   mesh=scene.dump(concatenate=True)
   vertices=np.asarray(mesh.vertices)
@@ -29,7 +31,7 @@ with open("dist/external_scene.bin","wb") as f:
   extent=np.maximum(bounds[1]-bounds[0],1e-6)
   vertices=(vertices-bounds[0])*(np.asarray(size)/extent)+np.asarray(center)-np.asarray([size[0]/2,0,size[2]/2])
   faces=np.asarray(mesh.faces,dtype=np.int64)
-  if len(faces)>4500:faces=faces[::math.ceil(len(faces)/4500)]
+  # Preserve every original triangle; no decimation.
   for face in faces:
    f.write(struct.pack("<I",mat))
    f.write(vertices[face].astype("<f4").tobytes())
@@ -40,6 +42,8 @@ assert count>100
 credits=urllib.request.urlopen(BASE+"CREDITS.md",timeout=90).read()
 with zipfile.ZipFile("dist/Kate-Converted-Metal-Assets.zip","w",zipfile.ZIP_DEFLATED) as z:
  z.write("dist/external_scene.bin","external_scene.bin")
+ for name, data in originals:
+  z.writestr("original_decoded_glb/"+name, data)
  z.writestr("THIRD_PARTY_CREDITS.md",credits)
- z.writestr("manifest.json",json.dumps({"triangles":count,"format":"uint32 triangleCount; repeat(uint32 materialId, 9 float32 positions)","models":[x[0] for x in SPEC]},indent=2))
+ z.writestr("manifest.json",json.dumps({"triangles":count,"format":"legacy geometry-only triangle stream; NOT an exact PBR conversion","models":[x[0] for x in SPEC],"decoded_originals":"original_decoded_glb/ preserves original GLB normals, UVs, textures and materials"},indent=2))
 print("converted triangles",count)
