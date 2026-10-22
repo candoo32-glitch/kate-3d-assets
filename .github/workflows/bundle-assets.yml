@@ -1,0 +1,26 @@
+name: Bundle Kate 3D Assets
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/bundle-assets.yml'
+      - 'scripts/bundle_assets.py'
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and validate GLB assets
+        run: python scripts/bundle_assets.py
+      - name: Upload asset ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kate-Furniture-Plants
+          path: dist/Kate-Furniture-Plants.zip
+          if-no-files-found: error
+          retention-days: 30
