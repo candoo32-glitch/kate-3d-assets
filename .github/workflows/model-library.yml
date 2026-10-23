@@ -10,7 +10,7 @@ on:
       model_limit:
         description: 'Maximum CC0 GLB models to bundle'
         required: false
-        default: '36'
+        default: '3'
   schedule:
     - cron: '0 5 1 * *'
 permissions:
@@ -18,7 +18,7 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,7 +27,7 @@ jobs:
       - name: Install Blender for authored-model conversion
         run: sudo apt-get update -qq && sudo apt-get install -y blender
       - name: Download and validate CC0 GLB models
-        run: python scripts/build_model_library.py --limit ${{ github.event.inputs.model_limit || '36' }} --output dist
+        run: python -u scripts/build_model_library.py --limit ${{ github.event.inputs.model_limit || '3' }} --max-attempts 6 --output dist
       - name: Validate catalog and GLB headers
         run: |
           python - <<'PY'
@@ -43,6 +43,7 @@ jobs:
       - name: Package model collection
         run: cd dist && zip -q -r ../Kate-CC0-Model-Library.zip .
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: Kate-CC0-Model-Library
           path: Kate-CC0-Model-Library.zip
