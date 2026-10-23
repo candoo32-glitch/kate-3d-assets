@@ -28,7 +28,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y blender python3-numpy
-          blender --background --python-expr "import numpy; print('Blender NumPy OK:', numpy.__version__)"
+          blender --background --python-expr "import sys; print('Blender Python:',sys.version); print(sys.path)"
+          NUMPY_DIR="$(/usr/bin/python3 -c 'import numpy,os; print(os.path.dirname(os.path.dirname(numpy.__file__)))')"
+          echo "PYTHONPATH=$NUMPY_DIR" >> "$GITHUB_ENV"
+          PYTHONPATH="$NUMPY_DIR" blender --background --python-expr "import numpy; print('Blender NumPy OK:',numpy.__version__)"
+      - name: Verify Blender glTF importer
+        run: blender --background --python-expr "import numpy; import io_scene_gltf2; print('glTF importer ready')"
       - name: Download and validate CC0 GLB models
         run: python -u scripts/build_model_library.py --limit ${{ github.event.inputs.model_limit || '3' }} --max-attempts 6 --output dist
       - name: Validate catalog and GLB headers
