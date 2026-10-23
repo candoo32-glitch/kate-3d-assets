@@ -69,7 +69,7 @@ def main():
  p=argparse.ArgumentParser()
  p.add_argument("--limit",type=int,default=36)
  p.add_argument("--output",default="dist")
- p.add_argument("--max-attempts",type=int,default=12)
+ p.add_argument("--max-attempts",type=int,default=72)
  a=p.parse_args()
  out=pathlib.Path(a.output); out.mkdir(parents=True,exist_ok=True)
  models=get_json(API+"/assets?t=models")
@@ -81,6 +81,15 @@ def main():
   cat=max(scores,key=scores.get)
   if scores[cat]: ranked.append((scores[cat],cat,asset_id,meta))
  ranked.sort(key=lambda r:(-r[0],r[2]))
+ # Interleave categories, preserving ranked order within each category.
+ buckets={cat:[item for item in ranked if item[1]==cat] for cat in CATEGORIES}
+ ranked=[]
+ offsets={cat:0 for cat in CATEGORIES}
+ while any(offsets[cat]<len(buckets[cat]) for cat in CATEGORIES):
+  for cat in ("forest","conservatory","furniture"):
+   if offsets[cat]<len(buckets[cat]):
+    ranked.append(buckets[cat][offsets[cat]])
+    offsets[cat]+=1
  counts={k:0 for k in CATEGORIES}; quotas={"forest":22,"conservatory":10,"furniture":4}
  manifest=[]; errors=[]
  print(f"DISCOVERED {len(ranked)} candidate assets; target {a.limit}",flush=True)
@@ -117,6 +126,7 @@ def main():
   except Exception as e:
    errors.append({"id":asset_id,"reason":str(e)})
    print("SKIP",asset_id,str(e),"FAILED",len(errors),flush=True)
+ (out/"build-info.json").write_text(json.dumps({"run_id":os.getenv("GITHUB_RUN_ID"),"run_url":"https://github.com/"+os.getenv("GITHUB_REPOSITORY","candoo32-glitch/kate-3d-assets")+"/actions/runs/"+os.getenv("GITHUB_RUN_ID","unknown"),"commit":os.getenv("GITHUB_SHA"),"successful":len(manifest),"counts":counts},indent=2))
  (out/"catalog.json").write_text(json.dumps({"source":"Poly Haven API","models":manifest,"skipped":errors,"counts":counts},indent=2))
  (out/"LICENSES.md").write_text("# Asset provenance\n\nAll bundled models are individually checked for CC0 metadata.\n\n"+"\n".join("- ["+m["name"]+"]("+m["source"]+") — CC0 — "+m["file"] for m in manifest)+"\n")
  if not manifest: raise SystemExit("No valid assets downloaded. Check upstream API and URLs.")
