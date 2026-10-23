@@ -18,7 +18,7 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Record this workflow run for future lookup
@@ -35,7 +35,7 @@ jobs:
             'run_url': f"https://github.com/{os.environ['REPO']}/actions/runs/{os.environ['RUN_ID']}",
             'source_commit': os.environ['SHA'],
             'workflow': 'model-library.yml'
-          }, indent=2) + '\\n')
+          }, indent=2) + '\n')
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
