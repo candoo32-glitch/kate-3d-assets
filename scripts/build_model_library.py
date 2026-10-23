@@ -3,7 +3,7 @@
 Only downloads model files with self-contained GLB payloads (or archives containing GLBs).
 Selection is reproducible via catalog.json; assets may change upstream.
 """
-import argparse, json, os, pathlib, re, urllib.request, zipfile, io, hashlib, time, subprocess, tempfile
+import argparse, json, os, pathlib, re, urllib.request, zipfile, io, hashlib, time, subprocess, tempfile, threading, sys
 API="https://api.polyhaven.com"
 UA={"User-Agent":"KateAssetLibrary/1.0 (GitHub Actions)"}
 CATEGORIES={
@@ -34,30 +34,53 @@ def asset_candidates(files):
     result.append((fmt,record))
  return result
 
-def convert_asset(fmt,record):
+def convert_asset(fmt,record,asset_id):
+ started=time.monotonic()
+ print(f"DOWNLOAD {asset_id}: source {fmt}",flush=True)
  with tempfile.TemporaryDirectory() as tmp:
   root=pathlib.Path(tmp)
   url=record["url"]
   name=pathlib.PurePosixPath(url.split("?")[0]).name
   src=root/name
-  src.write_bytes(download(url))
+  data=download(url)
+  src.write_bytes(data)
+  print(f"DOWNLOADED {asset_id}: source {len(data)/1048576:.1f} MiB in {time.monotonic()-started:.1f}s",flush=True)
   for relative,entry in record.get("include",{}).items():
    if not isinstance(entry,dict) or not entry.get("url"): continue
    target=root/relative
    if not target.resolve().is_relative_to(root.resolve()): raise ValueError("unsafe included asset path")
    target.parent.mkdir(parents=True,exist_ok=True)
-   target.write_bytes(download(entry["url"]))
+   included=download(entry["url"])
+   target.write_bytes(included)
+   print(f"TEXTURE {asset_id}: {relative} {len(included)/1048576:.1f} MiB",flush=True)
   dst=root/"asset.glb"
   script=root/"convert.py"
   script.write_text("import bpy,sys\nsource,dest,fmt=sys.argv[sys.argv.index('--')+1:]\nbpy.ops.object.select_all(action='SELECT')\nbpy.ops.object.delete(use_global=False)\nif fmt=='gltf': bpy.ops.import_scene.gltf(filepath=source)\nelif fmt=='blend': bpy.ops.wm.open_mainfile(filepath=source)\nelif fmt=='fbx': bpy.ops.import_scene.fbx(filepath=source)\nbpy.ops.export_scene.gltf(filepath=dest,export_format='GLB',export_apply=True)\n")
-  p=subprocess.run(["blender","--background","--python",str(script),"--",str(src),str(dst),fmt],capture_output=True,text=True,timeout=240)
-  if p.returncode or not dst.exists(): raise ValueError("Blender conversion failed: "+(p.stdout+p.stderr)[-700:])
+  cmd=["blender","--background","--python",str(script),"--",str(src),str(dst),fmt]
+  print(f"BLENDER {asset_id}: starting conversion",flush=True)
+  p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+  def stream():
+   for line in p.stdout:
+    print(f"BLENDER {asset_id}: {line.rstrip()}",flush=True)
+  reader=threading.Thread(target=stream,daemon=True)
+  reader.start()
+  try:
+   p.wait(timeout=90)
+  except subprocess.TimeoutExpired:
+   p.kill()
+   p.wait()
+   reader.join(timeout=2)
+   raise ValueError("Blender exceeded 90-second conversion timeout")
+  reader.join(timeout=2)
+  if p.returncode or not dst.exists(): raise ValueError(f"Blender exited {p.returncode}; GLB missing={not dst.exists()}")
+  print(f"BLENDER {asset_id}: finished in {time.monotonic()-started:.1f}s",flush=True)
   return dst.read_bytes()
 
 def main():
  p=argparse.ArgumentParser()
  p.add_argument("--limit",type=int,default=36)
  p.add_argument("--output",default="dist")
+ p.add_argument("--max-attempts",type=int,default=12)
  a=p.parse_args()
  out=pathlib.Path(a.output); out.mkdir(parents=True,exist_ok=True)
  models=get_json(API+"/assets?t=models")
@@ -73,6 +96,7 @@ def main():
  manifest=[]; errors=[]
  print(f"DISCOVERED {len(ranked)} candidate assets; target {a.limit}",flush=True)
  for index,(score,cat,asset_id,meta) in enumerate(ranked,1):
+  if len(manifest)+len(errors)>=a.max_attempts: break
   if len(manifest)>=a.limit: break
   if counts[cat]>=quotas[cat]: continue
   print(f"START {index}/{len(ranked)} {cat}/{asset_id} | success={len(manifest)} failed={len(errors)}",flush=True)
@@ -86,11 +110,11 @@ def main():
    if not candidates: raise ValueError("API has no glTF/Blend/FBX candidate")
    payload=None
    url=None
-   for fmt,record in candidates[:4]:
+   for fmt,record in candidates[:1]:
     try:
      url=record["url"]
      print(f"CONVERT {asset_id} {fmt} started",flush=True)
-     payload=convert_asset(fmt,record)
+     payload=convert_asset(fmt,record,asset_id)
      if payload[:4]==b"glTF": break
     except Exception as candidate_error:
      print("CANDIDATE FAILED",asset_id,fmt,str(candidate_error)[:180],flush=True)
@@ -107,5 +131,5 @@ def main():
  (out/"catalog.json").write_text(json.dumps({"source":"Poly Haven API","models":manifest,"skipped":errors,"counts":counts},indent=2))
  (out/"LICENSES.md").write_text("# Asset provenance\n\nAll bundled models are individually checked for CC0 metadata.\n\n"+"\n".join("- ["+m["name"]+"]("+m["source"]+") — CC0 — "+m["file"] for m in manifest)+"\n")
  if not manifest: raise SystemExit("No valid assets downloaded. Check upstream API and URLs.")
- print("Bundled",len(manifest),"models",counts)
+ print("SUMMARY",json.dumps({"successful":len(manifest),"failed":len(errors),"counts":counts}),flush=True)
 if __name__=="__main__": main()
