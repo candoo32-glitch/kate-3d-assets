@@ -49,7 +49,7 @@ def convert_asset(fmt,record):
    target.write_bytes(download(entry["url"]))
   dst=root/"asset.glb"
   script=root/"convert.py"
-  script.write_text("import bpy,sys\\nsource,dest,fmt=sys.argv[sys.argv.index('--')+1:]\\nbpy.ops.object.select_all(action='SELECT')\\nbpy.ops.object.delete(use_global=False)\\nif fmt=='gltf': bpy.ops.import_scene.gltf(filepath=source)\\nelif fmt=='blend': bpy.ops.wm.open_mainfile(filepath=source)\\nelif fmt=='fbx': bpy.ops.import_scene.fbx(filepath=source)\\nbpy.ops.export_scene.gltf(filepath=dest,export_format='GLB',export_apply=True)\\n")
+  script.write_text("import bpy,sys\nsource,dest,fmt=sys.argv[sys.argv.index('--')+1:]\nbpy.ops.object.select_all(action='SELECT')\nbpy.ops.object.delete(use_global=False)\nif fmt=='gltf': bpy.ops.import_scene.gltf(filepath=source)\nelif fmt=='blend': bpy.ops.wm.open_mainfile(filepath=source)\nelif fmt=='fbx': bpy.ops.import_scene.fbx(filepath=source)\nbpy.ops.export_scene.gltf(filepath=dest,export_format='GLB',export_apply=True)\n")
   p=subprocess.run(["blender","--background","--python",str(script),"--",str(src),str(dst),fmt],capture_output=True,text=True,timeout=240)
   if p.returncode or not dst.exists(): raise ValueError("Blender conversion failed: "+(p.stdout+p.stderr)[-700:])
   return dst.read_bytes()
@@ -71,21 +71,25 @@ def main():
  ranked.sort(key=lambda r:(-r[0],r[2]))
  counts={k:0 for k in CATEGORIES}; quotas={"forest":22,"conservatory":10,"furniture":4}
  manifest=[]; errors=[]
- for score,cat,asset_id,meta in ranked:
+ print(f"DISCOVERED {len(ranked)} candidate assets; target {a.limit}",flush=True)
+ for index,(score,cat,asset_id,meta) in enumerate(ranked,1):
   if len(manifest)>=a.limit: break
   if counts[cat]>=quotas[cat]: continue
+  print(f"START {index}/{len(ranked)} {cat}/{asset_id} | success={len(manifest)} failed={len(errors)}",flush=True)
   try:
    info=get_json(API+"/info/"+asset_id)
    license_name=str(info.get("license",meta.get("license","CC0"))).upper()
    if license_name not in ("CC0","CC0 1.0"): continue
    files=get_json(API+"/files/"+asset_id)
    candidates=asset_candidates(files)
+   print(f"SOURCES {asset_id}: {[(fmt,rec.get('url','')[-65:]) for fmt,rec in candidates[:4]]}",flush=True)
    if not candidates: raise ValueError("API has no glTF/Blend/FBX candidate")
    payload=None
    url=None
    for fmt,record in candidates[:4]:
     try:
      url=record["url"]
+     print(f"CONVERT {asset_id} {fmt} started",flush=True)
      payload=convert_asset(fmt,record)
      if payload[:4]==b"glTF": break
     except Exception as candidate_error:
@@ -96,10 +100,10 @@ def main():
    path=folder/(asset_id+".glb"); path.write_bytes(payload)
    manifest.append({"id":asset_id,"category":cat,"name":info.get("name",meta.get("name",asset_id)),"license":"CC0","source":"https://polyhaven.com/a/"+asset_id,"download_url":url,"file":str(path.relative_to(out)),"bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()})
    counts[cat]+=1
-   print("OK",cat,asset_id,len(payload),flush=True)
+   print("OK",cat,asset_id,len(payload),"TOTAL",len(manifest),counts,flush=True)
   except Exception as e:
    errors.append({"id":asset_id,"reason":str(e)})
-   print("SKIP",asset_id,str(e),flush=True)
+   print("SKIP",asset_id,str(e),"FAILED",len(errors),flush=True)
  (out/"catalog.json").write_text(json.dumps({"source":"Poly Haven API","models":manifest,"skipped":errors,"counts":counts},indent=2))
  (out/"LICENSES.md").write_text("# Asset provenance\n\nAll bundled models are individually checked for CC0 metadata.\n\n"+"\n".join("- ["+m["name"]+"]("+m["source"]+") — CC0 — "+m["file"] for m in manifest)+"\n")
  if not manifest: raise SystemExit("No valid assets downloaded. Check upstream API and URLs.")
