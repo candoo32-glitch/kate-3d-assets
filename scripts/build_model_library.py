@@ -25,7 +25,7 @@ def download(url,maxbytes=400_000_000):
 def asset_candidates(files):
  """Prefer 1k/2k glTF packages; Poly Haven supplies separate include files."""
  result=[]
- for fmt in ("gltf","blend","fbx"):
+ for fmt in ("gltf",):
   group=files.get(fmt,{})
   for resolution in ("1k","2k","4k"):
    block=group.get(resolution,{})
@@ -53,31 +53,17 @@ def convert_asset(fmt,record,asset_id):
    included=download(entry["url"])
    target.write_bytes(included)
    print(f"TEXTURE {asset_id}: {relative} {len(included)/1048576:.1f} MiB",flush=True)
+  if fmt!="gltf": raise ValueError("Pilot supports native glTF packages only")
   dst=root/"asset.glb"
-  script=root/"convert.py"
-  script.write_text("import bpy,sys\nsource,dest,fmt=sys.argv[sys.argv.index('--')+1:]\nbpy.ops.object.select_all(action='SELECT')\nbpy.ops.object.delete(use_global=False)\nif fmt=='gltf': bpy.ops.import_scene.gltf(filepath=source)\nelif fmt=='blend': bpy.ops.wm.open_mainfile(filepath=source)\nelif fmt=='fbx': bpy.ops.import_scene.fbx(filepath=source)\nbpy.ops.export_scene.gltf(filepath=dest,export_format='GLB',export_apply=True)\n")
-  cmd=["blender","--background","--python",str(script),"--",str(src),str(dst),fmt]
-  print(f"BLENDER {asset_id}: starting conversion",flush=True)
-  p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
-  log_tail=[]
-  def stream():
-   for line in p.stdout:
-    log_tail.append(line.rstrip())
-    if len(log_tail)>35: log_tail.pop(0)
-    print(f"BLENDER {asset_id}: {line.rstrip()}",flush=True)
-  reader=threading.Thread(target=stream,daemon=True)
-  reader.start()
-  try:
-   p.wait(timeout=90)
-  except subprocess.TimeoutExpired:
-   p.kill()
-   p.wait()
-   reader.join(timeout=2)
-   raise ValueError("Blender exceeded 90-second conversion timeout")
-  reader.join(timeout=2)
-  if p.returncode or not dst.exists(): raise ValueError(f"Blender exited {p.returncode}; GLB missing={not dst.exists()}; traceback tail: "+ " | ".join(log_tail[-12:]))
-  print(f"BLENDER {asset_id}: finished in {time.monotonic()-started:.1f}s",flush=True)
-  return dst.read_bytes()
+  cmd=["gltf-transform","copy",str(src),str(dst)]
+  print(f"PACK {asset_id}: glTF -> GLB (no Blender)",flush=True)
+  p=subprocess.run(cmd,capture_output=True,text=True,timeout=90)
+  if p.returncode or not dst.exists():
+   raise ValueError(f"glTF Transform failed ({p.returncode}): "+(p.stdout+p.stderr)[-1000:])
+  payload=dst.read_bytes()
+  if payload[:4]!=b"glTF": raise ValueError("Invalid GLB output header")
+  print(f"PACKED {asset_id}: {len(payload)/1048576:.1f} MiB in {time.monotonic()-started:.1f}s",flush=True)
+  return payload
 
 def main():
  p=argparse.ArgumentParser()
