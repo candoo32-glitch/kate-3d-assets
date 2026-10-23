@@ -10,17 +10,37 @@ on:
       model_limit:
         description: 'Maximum CC0 GLB models to bundle'
         required: false
-        default: '3'
+        default: '36'
   schedule:
     - cron: '0 5 1 * *'
 permissions:
-  contents: read
+  contents: write
 jobs:
   bundle:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Record this workflow run for future lookup
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          p=pathlib.Path('.github/latest-model-library-run.json')
+          p.write_text(json.dumps({
+            'run_id': int(os.environ['RUN_ID']),
+            'run_url': f"https://github.com/{os.environ['REPO']}/actions/runs/{os.environ['RUN_ID']}",
+            'source_commit': os.environ['SHA'],
+            'workflow': 'model-library.yml'
+          }, indent=2) + '\\n')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/latest-model-library-run.json
+          git diff --cached --quiet || (git commit -m "Record latest model library workflow run [skip ci]" && git push origin HEAD:main)
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -32,7 +52,7 @@ jobs:
           npm install --global @gltf-transform/cli
           gltf-transform --version
       - name: Download and validate CC0 GLB models
-        run: python -u scripts/build_model_library.py --limit ${{ github.event.inputs.model_limit || '3' }} --max-attempts 6 --output dist
+        run: python -u scripts/build_model_library.py --limit ${{ github.event.inputs.model_limit || '36' }} --max-attempts 72 --output dist
       - name: Validate catalog and GLB headers
         run: |
           python - <<'PY'
