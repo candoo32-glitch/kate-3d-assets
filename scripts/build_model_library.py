@@ -3,7 +3,7 @@
 Only downloads model files with self-contained GLB payloads (or archives containing GLBs).
 Selection is reproducible via catalog.json; assets may change upstream.
 """
-import argparse, json, os, pathlib, re, urllib.request, zipfile, io, hashlib, time
+import argparse, json, os, pathlib, re, urllib.request, zipfile, io, hashlib, time, subprocess, tempfile
 API="https://api.polyhaven.com"
 UA={"User-Agent":"KateAssetLibrary/1.0 (GitHub Actions)"}
 CATEGORIES={
@@ -24,11 +24,24 @@ def download(url,maxbytes=180_000_000):
   return data
 def find_urls(node):
  if isinstance(node,dict):
+  url=node.get("url")
+  if isinstance(url,str) and url.startswith("https://"): yield url
   for k,v in node.items():
-   if isinstance(v,str) and v.startswith("https://") and re.search(r"\\.(glb|zip)(?:\\?|$)",v,re.I): yield v
-   else: yield from find_urls(v)
+   if k!="url": yield from find_urls(v)
  elif isinstance(node,list):
   for v in node: yield from find_urls(v)
+
+def convert_blend(data):
+ with tempfile.TemporaryDirectory() as tmp:
+  src=pathlib.Path(tmp)/"asset.blend"
+  dst=pathlib.Path(tmp)/"asset.glb"
+  script=pathlib.Path(tmp)/"convert.py"
+  src.write_bytes(data)
+  script.write_text("import bpy,sys\nsrc,dst=sys.argv[sys.argv.index('--')+1:]\nbpy.ops.wm.open_mainfile(filepath=src)\nbpy.ops.export_scene.gltf(filepath=dst,export_format='GLB',export_apply=True)\n")
+  p=subprocess.run(["blender","--background","--python",str(script),"--",str(src),str(dst)],capture_output=True,text=True,timeout=240)
+  if p.returncode or not dst.exists(): raise ValueError("Blender export failed: "+(p.stdout+p.stderr)[-500:])
+  return dst.read_bytes()
+
 def main():
  p=argparse.ArgumentParser()
  p.add_argument("--limit",type=int,default=36)
@@ -55,21 +68,27 @@ def main():
    if "CC0" not in license_name: continue
    files=get_json(API+"/files/"+asset_id)
    urls=list(dict.fromkeys(find_urls(files)))
-   urls.sort(key=lambda x:(not x.lower().split("?")[0].endswith(".glb"),len(x)))
-   if not urls: raise ValueError("no GLB/ZIP URL in API response")
-   data=download(urls[0])
+   urls=[u for u in urls if u.split("?")[0].lower().endswith((".glb",".blend",".zip"))]
+   urls.sort(key=lambda u:({".glb":0,".blend":1,".zip":2}.get(pathlib.PurePosixPath(u.split("?")[0]).suffix.lower(),9),len(u)))
+   if not urls: raise ValueError("API contains no GLB, BLEND, or ZIP download URL")
    payload=None
-   if data[:4]==b"glTF": payload=data
-   elif zipfile.is_zipfile(io.BytesIO(data)):
-    with zipfile.ZipFile(io.BytesIO(data)) as z:
-     names=[n for n in z.namelist() if n.lower().endswith(".glb") and not n.startswith("__MACOSX/")]
-     if names:
-      names.sort(key=lambda n:z.getinfo(n).file_size)
-      payload=z.read(names[0])
+   for url in urls[:5]:
+    try:
+     data=download(url)
+     if data[:4]==b"glTF": payload=data
+     elif data[:7]==b"BLENDER": payload=convert_blend(data)
+     elif zipfile.is_zipfile(io.BytesIO(data)):
+      with zipfile.ZipFile(io.BytesIO(data)) as z:
+       names=[n for n in z.namelist() if n.lower().endswith(".glb")]
+       if names: payload=z.read(sorted(names,key=lambda n:z.getinfo(n).file_size)[0])
+     if payload and payload[:4]==b"glTF": break
+    except Exception as candidate_error:
+     print("CANDIDATE FAILED",asset_id,str(candidate_error)[:150],flush=True)
+   if not payload: raise ValueError("No candidate produced a valid GLB")
    if not payload or payload[:4]!=b"glTF": raise ValueError("download did not contain valid GLB header")
    folder=out/cat; folder.mkdir(exist_ok=True)
    path=folder/(asset_id+".glb"); path.write_bytes(payload)
-   manifest.append({"id":asset_id,"category":cat,"name":info.get("name",meta.get("name",asset_id)),"license":"CC0","source":"https://polyhaven.com/a/"+asset_id,"download_url":urls[0],"file":str(path.relative_to(out)),"bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()})
+   manifest.append({"id":asset_id,"category":cat,"name":info.get("name",meta.get("name",asset_id)),"license":"CC0","source":"https://polyhaven.com/a/"+asset_id,"download_url":url,"file":str(path.relative_to(out)),"bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()})
    counts[cat]+=1
    print("OK",cat,asset_id,len(payload),flush=True)
   except Exception as e:
