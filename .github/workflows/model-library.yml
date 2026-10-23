@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install Blender for authored-model conversion
+        run: sudo apt-get update -qq && sudo apt-get install -y blender
       - name: Download and validate CC0 GLB models
         run: python scripts/build_model_library.py --limit ${{ github.event.inputs.model_limit || '36' }} --output dist
       - name: Validate catalog and GLB headers
