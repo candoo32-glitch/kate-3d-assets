@@ -1,5 +1,10 @@
 name: Build Kate 3D Model Library
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/build_model_library.py'
+      - '.github/workflows/model-library.yml'
   workflow_dispatch:
     inputs:
       model_limit:
