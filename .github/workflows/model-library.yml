@@ -1,0 +1,42 @@
+name: Build Kate 3D Model Library
+on:
+  workflow_dispatch:
+    inputs:
+      model_limit:
+        description: 'Maximum CC0 GLB models to bundle'
+        required: false
+        default: '36'
+  schedule:
+    - cron: '0 5 1 * *'
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and validate CC0 GLB models
+        run: python scripts/build_model_library.py --limit ${{ github.event.inputs.model_limit || '36' }} --output dist
+      - name: Validate catalog and GLB headers
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          d=pathlib.Path('dist')
+          m=json.loads((d/'catalog.json').read_text())['models']
+          assert len(m)>0
+          for item in m:
+              f=d/item['file']
+              assert f.is_file() and f.read_bytes()[:4]==b'glTF'
+          print(f'Validated {len(m)} GLB assets')
+          PY
+      - name: Package model collection
+        run: cd dist && zip -q -r ../Kate-CC0-Model-Library.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kate-CC0-Model-Library
+          path: Kate-CC0-Model-Library.zip
+          retention-days: 30
