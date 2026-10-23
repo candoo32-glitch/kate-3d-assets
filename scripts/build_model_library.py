@@ -14,7 +14,7 @@ CATEGORIES={
 def get_json(url):
  req=urllib.request.Request(url,headers=UA)
  with urllib.request.urlopen(req,timeout=50) as f: return json.load(f)
-def download(url,maxbytes=180_000_000):
+def download(url,maxbytes=400_000_000):
  req=urllib.request.Request(url,headers=UA)
  with urllib.request.urlopen(req,timeout=150) as f:
   length=int(f.headers.get("Content-Length","0"))
@@ -59,8 +59,11 @@ def convert_asset(fmt,record,asset_id):
   cmd=["blender","--background","--python",str(script),"--",str(src),str(dst),fmt]
   print(f"BLENDER {asset_id}: starting conversion",flush=True)
   p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+  log_tail=[]
   def stream():
    for line in p.stdout:
+    log_tail.append(line.rstrip())
+    if len(log_tail)>35: log_tail.pop(0)
     print(f"BLENDER {asset_id}: {line.rstrip()}",flush=True)
   reader=threading.Thread(target=stream,daemon=True)
   reader.start()
@@ -72,7 +75,7 @@ def convert_asset(fmt,record,asset_id):
    reader.join(timeout=2)
    raise ValueError("Blender exceeded 90-second conversion timeout")
   reader.join(timeout=2)
-  if p.returncode or not dst.exists(): raise ValueError(f"Blender exited {p.returncode}; GLB missing={not dst.exists()}")
+  if p.returncode or not dst.exists(): raise ValueError(f"Blender exited {p.returncode}; GLB missing={not dst.exists()}; traceback tail: "+ " | ".join(log_tail[-12:]))
   print(f"BLENDER {asset_id}: finished in {time.monotonic()-started:.1f}s",flush=True)
   return dst.read_bytes()
 
