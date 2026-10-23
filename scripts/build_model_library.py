@@ -22,24 +22,36 @@ def download(url,maxbytes=180_000_000):
   data=f.read(maxbytes+1)
   if len(data)>maxbytes: raise ValueError("asset exceeds size limit")
   return data
-def find_urls(node):
- if isinstance(node,dict):
-  url=node.get("url")
-  if isinstance(url,str) and url.startswith("https://"): yield url
-  for k,v in node.items():
-   if k!="url": yield from find_urls(v)
- elif isinstance(node,list):
-  for v in node: yield from find_urls(v)
+def asset_candidates(files):
+ """Prefer 1k/2k glTF packages; Poly Haven supplies separate include files."""
+ result=[]
+ for fmt in ("gltf","blend","fbx"):
+  group=files.get(fmt,{})
+  for resolution in ("1k","2k","4k"):
+   block=group.get(resolution,{})
+   record=block.get(fmt,block)
+   if isinstance(record,dict) and record.get("url"):
+    result.append((fmt,record))
+ return result
 
-def convert_blend(data):
+def convert_asset(fmt,record):
  with tempfile.TemporaryDirectory() as tmp:
-  src=pathlib.Path(tmp)/"asset.blend"
-  dst=pathlib.Path(tmp)/"asset.glb"
-  script=pathlib.Path(tmp)/"convert.py"
-  src.write_bytes(data)
-  script.write_text("import bpy,sys\nsrc,dst=sys.argv[sys.argv.index('--')+1:]\nbpy.ops.wm.open_mainfile(filepath=src)\nbpy.ops.export_scene.gltf(filepath=dst,export_format='GLB',export_apply=True)\n")
-  p=subprocess.run(["blender","--background","--python",str(script),"--",str(src),str(dst)],capture_output=True,text=True,timeout=240)
-  if p.returncode or not dst.exists(): raise ValueError("Blender export failed: "+(p.stdout+p.stderr)[-500:])
+  root=pathlib.Path(tmp)
+  url=record["url"]
+  name=pathlib.PurePosixPath(url.split("?")[0]).name
+  src=root/name
+  src.write_bytes(download(url))
+  for relative,entry in record.get("include",{}).items():
+   if not isinstance(entry,dict) or not entry.get("url"): continue
+   target=root/relative
+   if not target.resolve().is_relative_to(root.resolve()): raise ValueError("unsafe included asset path")
+   target.parent.mkdir(parents=True,exist_ok=True)
+   target.write_bytes(download(entry["url"]))
+  dst=root/"asset.glb"
+  script=root/"convert.py"
+  script.write_text("import bpy,sys\\nsource,dest,fmt=sys.argv[sys.argv.index('--')+1:]\\nbpy.ops.object.select_all(action='SELECT')\\nbpy.ops.object.delete(use_global=False)\\nif fmt=='gltf': bpy.ops.import_scene.gltf(filepath=source)\\nelif fmt=='blend': bpy.ops.wm.open_mainfile(filepath=source)\\nelif fmt=='fbx': bpy.ops.import_scene.fbx(filepath=source)\\nbpy.ops.export_scene.gltf(filepath=dest,export_format='GLB',export_apply=True)\\n")
+  p=subprocess.run(["blender","--background","--python",str(script),"--",str(src),str(dst),fmt],capture_output=True,text=True,timeout=240)
+  if p.returncode or not dst.exists(): raise ValueError("Blender conversion failed: "+(p.stdout+p.stderr)[-700:])
   return dst.read_bytes()
 
 def main():
@@ -65,26 +77,20 @@ def main():
   try:
    info=get_json(API+"/info/"+asset_id)
    license_name=str(info.get("license",meta.get("license","CC0"))).upper()
-   if "CC0" not in license_name: continue
+   if license_name not in ("CC0","CC0 1.0"): continue
    files=get_json(API+"/files/"+asset_id)
-   urls=list(dict.fromkeys(find_urls(files)))
-   urls=[u for u in urls if u.split("?")[0].lower().endswith((".glb",".blend",".zip"))]
-   urls.sort(key=lambda u:({".glb":0,".blend":1,".zip":2}.get(pathlib.PurePosixPath(u.split("?")[0]).suffix.lower(),9),len(u)))
-   if not urls: raise ValueError("API contains no GLB, BLEND, or ZIP download URL")
+   candidates=asset_candidates(files)
+   if not candidates: raise ValueError("API has no glTF/Blend/FBX candidate")
    payload=None
-   for url in urls[:5]:
+   url=None
+   for fmt,record in candidates[:4]:
     try:
-     data=download(url)
-     if data[:4]==b"glTF": payload=data
-     elif data[:7]==b"BLENDER": payload=convert_blend(data)
-     elif zipfile.is_zipfile(io.BytesIO(data)):
-      with zipfile.ZipFile(io.BytesIO(data)) as z:
-       names=[n for n in z.namelist() if n.lower().endswith(".glb")]
-       if names: payload=z.read(sorted(names,key=lambda n:z.getinfo(n).file_size)[0])
-     if payload and payload[:4]==b"glTF": break
+     url=record["url"]
+     payload=convert_asset(fmt,record)
+     if payload[:4]==b"glTF": break
     except Exception as candidate_error:
-     print("CANDIDATE FAILED",asset_id,str(candidate_error)[:150],flush=True)
-   if not payload: raise ValueError("No candidate produced a valid GLB")
+     print("CANDIDATE FAILED",asset_id,fmt,str(candidate_error)[:180],flush=True)
+   if not payload: raise ValueError("No source model converted successfully")
    if not payload or payload[:4]!=b"glTF": raise ValueError("download did not contain valid GLB header")
    folder=out/cat; folder.mkdir(exist_ok=True)
    path=folder/(asset_id+".glb"); path.write_bytes(payload)
